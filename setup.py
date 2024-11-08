@@ -18,11 +18,10 @@ URL = 'https://github.com/universetraveller/moduleimporter_python'
 EMAIL = 'universetraveller@outlook.com'
 AUTHOR = 'universetraveller'
 REQUIRES_PYTHON = '>=3.8.0'
-VERSION = '0.1.0'
+VERSION = '1.0.0'
 
 # What packages are required for this module to be executed?
 REQUIRED = [
-    'nsimport'
     # 'requests', 'maya', 'records',
 ]
 
@@ -123,6 +122,8 @@ setup(
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: Implementation :: CPython',
+        'Topic :: Software Development :: Libraries :: Python Modules',
+        'Topic :: Utilities',
     ],
     # $ setup.py publish support.
     cmdclass={

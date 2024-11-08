@@ -22,7 +22,8 @@ class PyAttr:
     def get_source(self):
         return self._from
 
-def skip_attr(attr, _checkers=[inspect.isclass, inspect.ismodule, inspect.ismethod, inspect.isfunction, inspect.isbuiltin]):
+_checkers = (inspect.isclass, inspect.ismodule, inspect.ismethod, inspect.isfunction, inspect.isbuiltin)
+def skip_attr(attr, _checkers=_checkers):
     for _checker in _checkers:
         if _checker(attr):
             return True
@@ -34,10 +35,17 @@ def ismodule(obj):
 class PyMethod(PyAttr):
     def __init__(self, name=None, instance=None, source=None):
         super().__init__(name, instance, source)
+        self._signature = None
 
     @property
     def method(self):
         return self._inst
+
+    @property
+    def signature(self):
+        if self._signature is None:
+            self._signature = inspect.signature(self._inst)
+        return self._signature
 
     def get_method(self):
         return self._inst
@@ -49,28 +57,35 @@ class PyMethod(PyAttr):
         return self._inst(*args, **kwargs)
 
     def get_parameters(self):
-        return list(inspect.signature(self._inst).parameters.values())
+        return list(self.signature.parameters.values())
 
     def get_parameter_names(self):
-        return list(inspect.signature(self._inst).parameters.keys())
+        return list(self.signature.parameters.keys())
 
     def get_parameter_types(self):
-        return list(map(lambda x:x.annotation, list(inspect.signature(self._inst).parameters.values())))
+        return list(map(lambda x:x.annotation, list(self.signature.parameters.values())))
     
     def get_parameter_count(self):
-        return len(list(inspect.signature(self._inst).parameters))
+        return len(list(self.signature.parameters))
 
 class BaseModule:
     def __init__(self, instance):
         self._module = instance
+        self._cache = {}
 
+    def _cache_it(self, name, inst, _type, _attr='_inst'):
+        o = self._cache.get(name, None)
+        if o is None or getattr(o, _attr) != inst:
+            self._cache[name] = _type(name, inst, self)
+        return self._cache.get(name)
+        
     def get_attrs(self, _all=False):
         _attrs = []
         for attr in inspect.getmembers(self._module):
             if not _all:
                 if skip_attr(attr):
                     continue
-            _attrs.append(PyAttr(attr[0], attr[1], self))
+            _attrs.append(self._cache_it(attr[0], attr[1], PyAttr))
         return _attrs
     
     def get_attr(self, name, _all=False):
@@ -80,8 +95,8 @@ class BaseModule:
             raise ValueError(f'Attribute {name} does not exist')
         else:
             if not _all and skip_attr(_attr):
-                raise ValueError(f'_all is not True, not allow to get this attribute')
-            return PyAttr(name, _attr, self)
+                raise ValueError(f'Not permitted to get this attribute because _all is False')
+            return self._cache_it(name, _attr, PyAttr)
 
     def get_method(self, name):
         try:
@@ -90,14 +105,14 @@ class BaseModule:
             raise ValueError(f'Method {name} does not exist')
         else:
             if inspect.ismethod(_met) or inspect.isfunction(_met):
-                return PyMethod(name, _met, self)
+                return self._cache_it(name, _met, PyMethod)
             else:
                 raise ValueError(f'Method {name} does not exist')
 
     def get_methods(self):
         _methods = []
         for _met in inspect.getmembers(self._module, inspect.isfunction):
-            _methods.append(PyMethod(_met[0], _met[1], self))
+            _methods.append(self._cache_it(_met[0], _met[1], PyMethod))
         return _methods
 
 class PyClass(PyAttr, BaseModule):
@@ -116,10 +131,10 @@ class PyClass(PyAttr, BaseModule):
         return isinstance(obj, self._inst)
 
     def get_constructor(self):
-        return PyMethod('__init__', getattr(self._inst, '__init__'), self)
+        return self._cache_it('__init__', getattr(self._inst, '__init__'), PyMethod)
 
     def get_init(self):
-        return PyMethod('__init__', getattr(self._inst, '__init__'), self)
+        return self._cache_it('__init__', getattr(self._inst, '__init__'), PyMethod)
 
     def new_instance(self, *args, **kwargs):
         new_inst = object.__new__(self._inst)
@@ -129,11 +144,12 @@ class PyClass(PyAttr, BaseModule):
     def get_parent_classes(self):
         return self._inst.__bases__
 
+_MODULE_WRAPPER = lambda name, inst, p : PyModule(inst, p)
 class PyModule(BaseModule):
     def __init__(self, instance, importer=None):
         super().__init__(instance)
         if not inspect.ismodule(self._module):
-            raise ValueError(f'Need module type as argument, but got {type(self._module)}')
+            raise ValueError(f'Expected module type as argument, but got {type(self._module)}')
         self._importer = importer
 
     @property
@@ -158,7 +174,7 @@ class PyModule(BaseModule):
     def get_classes(self):
         _classes = []
         for _cls in inspect.getmembers(self._module, inspect.isclass):
-            _classes.append(PyClass(_cls[0], _cls[1], self))
+            _classes.append(self._cache_it(_cls[0], _cls[1], PyClass))
         return _classes
 
     def get_class(self, name):
@@ -168,14 +184,14 @@ class PyModule(BaseModule):
             raise ValueError(f'Class {name} does not exist')
         else:
             if inspect.isclass(_cls):
-                return PyClass(name, _cls, self)
+                return self._cache_it(name, _cls, PyClass)
             else:
                 raise ValueError(f'Class {name} does not exist')
 
     def get_submodules(self):
         _ms = []
         for _m in inspect.getmembers(self._module, inspect.ismodule):
-            _ms.append(PyModule(_m[1], self))
+            _ms.append(self._cache_it('', _m[1], _MODULE_WRAPPER, '_module'))
         return _ms
 
     def get_submodule(self, name):
@@ -185,6 +201,6 @@ class PyModule(BaseModule):
             raise ValueError(f'Module {name} does not exists')
         else:
             if inspect.ismodule(_m):
-                return PyModule(_m, self)
+                return self._cache_it('', _m, _MODULE_WRAPPER, '_module')
             else:
                 raise ValueError(f'Module {name} does not exists')

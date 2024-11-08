@@ -1,17 +1,21 @@
 from . import util
-import importlib.util
+from importlib.util import module_from_spec
+from importlib.util import spec_from_file_location
 from . import _wrapper
 import functools
+import os
+from threading import RLock
 
-SYS_DIR_SEP = '/'
+_lock = RLock()
 
 class BaseImporter:
     def __init__(self, _path=[], _globals=None):
         self.path = _path
         self.modules = {}
         if _globals is None:
-            self.init_path(_globals)
-            self.init_globals(_globals)
+            self.init_path()
+            with _lock:
+                self.init_globals()
         else:
             self.init_from_globals(_globals)
 
@@ -21,7 +25,7 @@ class BaseImporter:
         for name in _globals:
             setattr(self, name, _globals[name])
 
-    def init_globals(self, _globals):
+    def init_globals(self):
         # works like globals()
         util.reset_sys()
         self.modules = util.lib_setup()
@@ -30,15 +34,15 @@ class BaseImporter:
         self.meta_path = util.default_meta_path
         self.import_functions = [util.default_import_functions[0]]
         self.builtins = util.create_builtins(self)
-        self.import_module = functools.partial(util._util_import, self)
+        self.import_module = functools.partial(util._import, self)
         self.set_module_attrs = functools.partial(util.set_module_attrs, self)
         self.modules['sys'] = util.copy_sys(self)
 
-    def init_path(self, _globals):
+    def init_path(self):
         self.path.extend(util.base_path())
 
     def load_from_spec(self, spec):
-        module = importlib.util.module_from_spec(spec)
+        module = module_from_spec(spec)
         self.modules[module.__name__] = module
         module = self.set_module_attrs(module)
         try:
@@ -48,10 +52,10 @@ class BaseImporter:
         return module
 
     def spec_from_path(self, path):
-        last_sep = path.rfind(SYS_DIR_SEP)
+        last_sep = path.rfind(os.sep)
         last_level = path if last_sep == -1 else path[last_sep + 1:]
         module_name = last_level[:last_level.find('.')] if '.' in last_level else last_level
-        spec = importlib.util.spec_from_file_location(module_name, path)
+        spec = spec_from_file_location(module_name, path)
         if not spec:
             msg = f'Could not load {module_name} from {path}'
             raise ModuleNotFoundError(msg, name=module_name)
@@ -142,11 +146,15 @@ class _PathModuleImporter(BaseImporter):
         self.base_dirs.append(p)
         self.path.insert(0, p)
 
+_methods_to_wrap = ('find_module',
+                    'find_loaded_module',
+                    'reload_module',
+                    'load_given_module',
+                    'define_module')
 class PathModuleImporter(_PathModuleImporter):
     def __init__(self, _dirs, _globals=None, _cast=None):
         super().__init__(_dirs, _globals)
-        _methods = ['find_module', 'find_loaded_module', 'reload_module', 'load_given_module', 'define_module']
-        self.cast_methods(_cast, _methods)
+        self.cast_methods(_cast, _methods_to_wrap)
 
     def cast_methods(self, _cast, _methods):
         self._cast = self._convert if _cast is None else _cast
@@ -192,4 +200,4 @@ try:
 except:
     class NsModuleImporter(PathModuleImporter):
         def __init__(self, _dir, _cast=None):
-            raise NotImplementedError('Module nsimport needed')
+            raise NotImplementedError('Module nsimport is required')

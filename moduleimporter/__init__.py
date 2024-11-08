@@ -1,7 +1,18 @@
 from . import Importer, _wrapper, util, PathFinder
-__all__ =  ['PyObjects', '_PathModuleImporter', 'PathModuleImporter', 'NsModuleImporter', 'Finders']
+
 PyObjects = _wrapper
-_PathModuleImporter = Importer._PathModuleImporter
+
+# GeneralModuleImporter returns no wrapped modules
+GeneralModuleImporter = Importer._PathModuleImporter
+
+# PathModuleImporter and NsModuleImporter return wrapped modules
 PathModuleImporter = Importer.PathModuleImporter
 NsModuleImporter = Importer.NsModuleImporter
+
 Finders = PathFinder
+
+__all__ =  ['PyObjects',
+            'GeneralModuleImporter',
+            'PathModuleImporter',
+            'NsModuleImporter',
+            'Finders']

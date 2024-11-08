@@ -1,8 +1,8 @@
 import importlib
 from importlib.machinery import PathFinder
-from importlib import _bootstrap_external
 from importlib._bootstrap_external import _NamespacePath
 import importlib._bootstrap
+
 class NameSpacePath(_NamespacePath):
     _epoch = 0
     def __init__(self, _globals, name, path, path_finder):
@@ -18,15 +18,12 @@ class NameSpacePath(_NamespacePath):
         parent, dot, me = self._name.rpartition('.')
         if dot == '':
             # This is a top-level module. sys.path contains the parent path.
-            #return self._globals.paths
             return '__virtual_top__', 'path'
         # Not a top-level module. parent-module.__path__ contains the
         #  parent path.
-        #return getattr(self._globals.modules[parent], '__path__')
         return parent, '__path__'
 
     def _get_parent_path(self):
-        #return self._find_parent_path_names()
         parent_module_name, path_attr_name = self._find_parent_path_names()
         return getattr(self._globals.modules[parent_module_name], path_attr_name)
 

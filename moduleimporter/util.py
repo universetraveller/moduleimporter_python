@@ -1,19 +1,36 @@
 import builtins
 import sys
 import _imp
-import importlib.util
-import importlib._bootstrap
 import functools
 from . import PathFinder
-#import copy
-__oimport__ = builtins.__import__
-#__builtins = {}
-#for name in builtins.__dict__:
-#    __builtins[name]=builtins.__dict__[name]
-__builtins = builtins.__dict__.copy()
+import os
+import importlib._bootstrap
+from importlib.util import module_from_spec
+from importlib._bootstrap import _ImportLockContext
+from importlib._bootstrap import _verbose_message
+from importlib._bootstrap import _ModuleLockManager
+from importlib._bootstrap import _lock_unlock_module
+from importlib._bootstrap import _sanity_check
+from importlib._bootstrap import _resolve_name
+from importlib._bootstrap import _calc___package__
+from importlib._bootstrap import _setup
+
+def _object_name(obj):
+    """
+    Defined in python standard library with higher version
+    """
+    try:
+        return obj.__qualname__
+    except AttributeError:
+        return type(obj).__qualname__
+
+MODULE = type(sys)
+_warnings = sys.modules['_warnings']
+sys_import = builtins.__import__
+_frozen_builtins = builtins.__dict__.copy()
 
 def base_builtins():
-    return __builtins.copy()
+    return _frozen_builtins.copy()
 
 def create_builtins(_globals):
     base = base_builtins()
@@ -25,20 +42,13 @@ def copy_builtins(_globals):
     _builtins.__dict__['__import__'] = functools.partial(_import_core, _globals)
     return _builtins 
 
+SCRIPT_PATH = sys.argv[0]
 def base_path():
-    return sys.path[1:]
+    return [p for p in sys.path if p != SCRIPT_PATH]
 
-def original_import():
-    return __oimport__
-
-class _GLOBALS:
-    def __init__(self, modules, path):
-        self.modules = modules
-        self.path = path
-    def debug(self):
-        print('{}\nself.modules: {}\nself.path: {}\n{}'.format('*'*10, self.modules, self.path, '*'*10))
-
-default_meta_path = [PathFinder.NameSpacePathFinder, PathFinder.BuiltinImporter, PathFinder.FrozenImporter]
+default_meta_path = (PathFinder.NameSpacePathFinder,
+                     PathFinder.BuiltinImporter,
+                     PathFinder.FrozenImporter)
 def get_default_meta_path(num=-1):
     ret = default_meta_path.copy()
     return ret if num < 0 else ret[:num]
@@ -48,6 +58,11 @@ def set_default_meta_path(obj=None):
     return obj
 
 def _find_spec_core(_globals, name, path, target=None):
+    """
+    Modified from importlib._boostrap._find_spec
+
+    Function to find module spec that can be used to load the module actually
+    """
     meta_path = _globals.meta_path
     if meta_path is None:
         raise ImportError("meta_path is None, Python is likely "
@@ -57,7 +72,7 @@ def _find_spec_core(_globals, name, path, target=None):
 
     is_reload = name in _globals.modules
     for finder in meta_path:
-        with importlib._bootstrap._ImportLockContext():
+        with _ImportLockContext():
                 try:
                     find_spec = finder.find_spec
                 except AttributeError:
@@ -115,18 +130,31 @@ def _load_backward_compatible(_globals, spec):
             pass
     return module
 
+load_module_from_spec = module_from_spec
+"""
+This function create a new module from the spec using spec.loader
+
+and then initialize module attributes but does not access global namespace
+"""
+
 def _load_unlocked(_globals, spec):
+    """
+    Modified from importlib._bootstrap._load_unlocked
+
+    It seems spec.loader.exec_module does not inject modules
+    loaded by module of the spec into sys.module. Can we use 
+    this feature to avoid injection of other modules?
+    """
     if spec.loader is not None:
         # Not a namespace package.
         if not hasattr(spec.loader, 'exec_module'):
-            msg = (f"{importlib._bootstrap._object_name(spec.loader)}.exec_module() not found; "
+            msg = (f"{_object_name(spec.loader)}.exec_module() not found; "
                     "falling back to load_module()")
             _warnings.warn(msg, ImportWarning)
             return _load_backward_compatible(_globals, spec)
-    module = importlib.util.module_from_spec(spec)
+    module = load_module_from_spec(spec)
     spec._initializing = True
     try:
-        #module.__dict__['__builtins__'] = _globals.modules['__virtual_top__'].builtins
         set_module_attrs(_globals, module)
         _globals.modules[spec.name] = module
         try:
@@ -141,25 +169,33 @@ def _load_unlocked(_globals, spec):
             except KeyError:
                 pass
             raise
+        # Original importlib using sys.modules.pop to help move
+        # the module to the end of modules
+        # I use sys.modules.get there so that it would not be moved
+        # to the end of the dict
+        # I forgot why I made this change. May be the original version
+        # is better
         module = _globals.modules.get(spec.name)
         _globals.modules[spec.name] = module
-        importlib._bootstrap._verbose_message('import {!r} # {!r}', spec.name, spec.loader)
+        _verbose_message('import {!r} # {!r}', spec.name, spec.loader)
     finally:
         spec._initializing = False
     return module
 
 _ERR_MSG_PREFIX = 'No module named '
 _ERR_MSG = _ERR_MSG_PREFIX + '{!r}'
-# from importlib._bootstrap._find_and_load_unlocked
 def _import_internal(_globals, name, __backup_import):
-    # needs to bind modules and paths
+    """
+    from importlib._bootstrap._find_and_load_unlocked
+
+    needs to bind modules and paths
+    """
     parent_spec = None
     parent = name.rpartition('.')[0]
     path=None
     if parent:
         if parent not in _globals.modules:
             module = __backup_import(_globals, parent)
-            #_globals.modules[parent] = module
         if name in _globals.modules:
             return _globals.modules[name]
         parent_module = _globals.modules[parent]
@@ -170,10 +206,8 @@ def _import_internal(_globals, name, __backup_import):
             raise ModuleNotFoundError(msg, name=name) from None
         parent_spec = parent_module.__spec__
         child = name.rpartition('.')[2]
-    #_globals.path.append(path)
     spec = _find_spec_core(_globals, name, path)
     if spec is None:
-        #_globals.debug()
         raise ModuleNotFoundError(f'{_ERR_MSG_PREFIX}{name!r}', name=name)
     else:
         if parent_spec:
@@ -192,22 +226,24 @@ def _import_internal(_globals, name, __backup_import):
             setattr(parent_module, child, module)
         except AttributeError:
             msg = f"Cannot set an attribute on {parent!r} for child module {child!r}"
-            raise Exception(msg)
+            _warnings.warn(msg, ImportWarning)
     return module
 
-# _find_load
-# from importlib._bootstrap._find_and_load
 _NEEDS_LOADING = object()
 def _find_load(_globals, name, func_):
-    # should bind modules
+    """
+    from importlib._bootstrap._find_and_load
+
+    should bind modules
+    """
     module = _globals.modules.get(name, _NEEDS_LOADING)
     if (module is _NEEDS_LOADING or
         getattr(getattr(module, "__spec__", None), "_initializing", False)):
-        with importlib._bootstrap._ModuleLockManager(name):
+        with _ModuleLockManager(name):
             module = _globals.modules.get(name, _NEEDS_LOADING)
             if module is _NEEDS_LOADING:
                 return _import_internal(_globals, name, func_)
-        importlib._bootstrap._lock_unlock_module(name)
+        _lock_unlock_module(name)
 
     if module is None:
         message = ('import of {} halted; '
@@ -216,13 +252,22 @@ def _find_load(_globals, name, func_):
 
     return module
 
-# from importlib._bootstrap._gcd_import
-# replace _gcd_import as _util_import
-def _util_import(_globals, name, package=None, level=0):
-    importlib._bootstrap._sanity_check(name, package, level)
+def _import(_globals, name, package=None, level=0):
+    """
+    Modified from importlib._bootstrap._gcd_import
+
+    name is the module name without beginning '.'
+
+    package is required for relative import
+
+    level is the relative levels number from current scope to name. 
+    for example, from ..name import * leads to level=2 because
+    there is two '.' before name
+    """
+    _sanity_check(name, package, level)
     if level > 0:
-        name = importlib._bootstrap._resolve_name(name, package, level)
-    return _find_load(_globals, name, _util_import)
+        name = _resolve_name(name, package, level)
+    return _find_load(_globals, name, _import)
 
 # from importlib._bootstrap._handle_fromlist
 # add parameter, replace sys.modules with _globals.modules
@@ -252,36 +297,37 @@ def _handle_fromlist(_globals, module, fromlist, import_, *, recursive=False):
 
 def _import_to_loader(_globals, name, globals=None, locals=None, fromlist=(), level=0):
     if level==0:
-        module=_util_import(_globals, name)
+        module=_import(_globals, name)
     else:
         globals_ = globals if globals is not None else {}
-        package = importlib._bootstrap._calc___package__(globals_)
-        module = _util_import(_globals, name, package, level)
+        package = _calc___package__(globals_)
+        module = _import(_globals, name, package, level)
     if not fromlist:
         if level == 0:
-            return _util_import(_globals, name.partition('.')[0])
+            return _import(_globals, name.partition('.')[0])
         elif not name:
             return module
         else:
             cut_off = len(name) - len(name.partition('.')[0])
             return _globals.modules[module.__name__[:len(module.__name__)-cut_off]]
     elif hasattr(module, '__path__'):
-        return _handle_fromlist(_globals, module, fromlist, _util_import)
+        return _handle_fromlist(_globals, module, fromlist, _import)
     else:
         return module
 
-def _import_backup(_globals, name, globals=None, locals=None, fromlist=(), level=0):
-    # delegate to original import
-    imported = __oimport__(name, globals, locals, fromlist, level)
+def _import_to_sys(_globals, name, globals=None, locals=None, fromlist=(), level=0):
+    # delegate to the original import
+    imported = sys_import(name, globals, locals, fromlist, level)
     _globals.modules[name] = imported
     return imported
 
-default_import_functions = [_import_to_loader, _import_backup]
+default_import_functions = (_import_to_loader, _import_to_sys)
 def get_default_import_functions(num=-1):
     ret = default_import_functions.copy()
     return ret if num < 0 else ret[:num]
 
 def set_default_import_functions(_obj):
+    global default_import_functions
     default_import_functions = _obj
     return _obj
 
@@ -304,11 +350,8 @@ def _import_core(_globals, name, globals=None, locals=None, fromlist=(), level=0
     else:
         raise last_exception
 
-def _import_core_dev(_globals, name, globals=None, locals=None, fromlist=(), level=0):
-    return __oimport__(name, globals, locals, fromlist, level)
-
 def copy_module(_module, **keywords):
-    module = type(sys)(_module.__name__, 'from copy_module')
+    module = MODULE(_module.__name__, 'from copy_module')
     keyword_list = []
     for name in keywords:
         keyword_list.append(name)
@@ -330,39 +373,37 @@ def reset_sys():
     sys.modules = dict(sys.modules)
 
 def set_module_attrs(_globals, module):
+    """
+    Add builtins and sys module as attributes for the module
+    """
     module.__dict__['__builtins__'] = _globals.modules['__virtual_top__'].builtins
     module.__dict__['sys'] = _globals.modules['sys']
     return module
 
+_SETUP_ARGS = (getattr(importlib._bootstrap, 'sys', None),
+               getattr(importlib._bootstrap, '_imp', None))
+def _bootstrap_setup(sys_module=sys, _imp_module=_imp):
+    global _SETUP_ARGS
+    if _SETUP_ARGS != (sys, _imp):
+        _setup(sys_module, _imp_module)
+        _SETUP_ARGS = (sys, _imp)
+
 def lib_setup(sys_module=sys, _imp_module=_imp):
     _modules = {}
-    importlib._bootstrap._setup(sys_module, _imp_module)
+    _bootstrap_setup(sys_module, _imp_module)
     for name, module in sys.modules.items():
-        if isinstance(module, type(sys)):
+        if isinstance(module, MODULE):
             if name in sys.builtin_module_names or _imp.is_frozen(name):
                 _modules[name] = module
-    for name in ['_thread', '_warnings', '_weakref']:
+    for name in ('_thread', '_warnings', '_weakref'):
         if not name in _modules:
             _modules[name] = sys.modules[name]
     return _modules
 
-class ImportFunc:
-    '''
-    def __init__(self, _globals, _import=_import_core):
-        self.sys_globals = _globals
-        self.instance = _import
-    '''
-    def __new__(cls, _glb, _imp):
-        self = super(ImportFunc, cls).__new__(cls)
-        self.sys_globals = _glb
-        self.instance = _imp
-        return self
-
-    def __call__(self, *args, **kwargs):
-        return self.instance(self.sys_globals, *args, **kwargs)
-
 def bind_method(_globals, _method=_import_core):
-    # faster than ImportFunc
+    # functools is faster than self-implemented method binding
+    # because in most cases it will use _functools which is 
+    # implemented in C
     return functools.partial(_method, _globals)
 
 def cast_method(method, _cast):
@@ -374,9 +415,8 @@ def cast_method(method, _cast):
 def cast(_method, _cast, *args, **kwargs):
     return _cast(_method(*args, **kwargs))
 
-SYS_NEWLINE = '\n'
 def write_error(s):
-    sys.stderr.write(f'{s}{SYS_NEWLINE}')
+    sys.stderr.write(f'{s}{os.linesep}')
 
 def create_module(name):
-    return type(sys)(name)
+    return MODULE(name)
