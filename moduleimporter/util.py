@@ -6,6 +6,12 @@ from . import PathFinder
 import os
 import importlib._bootstrap
 from importlib.util import module_from_spec
+"""
+This function create a new module from the spec using spec.loader
+
+and then initialize module attributes but does not access global namespace
+"""
+
 from importlib._bootstrap import _ImportLockContext
 from importlib._bootstrap import _verbose_message
 from importlib._bootstrap import _ModuleLockManager
@@ -46,9 +52,9 @@ SCRIPT_PATH = sys.argv[0]
 def base_path():
     return [p for p in sys.path if p != SCRIPT_PATH]
 
-default_meta_path = (PathFinder.NameSpacePathFinder,
+default_meta_path = [PathFinder.NameSpacePathFinder,
                      PathFinder.BuiltinImporter,
-                     PathFinder.FrozenImporter)
+                     PathFinder.FrozenImporter]
 def get_default_meta_path(num=-1):
     ret = default_meta_path.copy()
     return ret if num < 0 else ret[:num]
@@ -130,20 +136,9 @@ def _load_backward_compatible(_globals, spec):
             pass
     return module
 
-load_module_from_spec = module_from_spec
-"""
-This function create a new module from the spec using spec.loader
-
-and then initialize module attributes but does not access global namespace
-"""
-
 def _load_unlocked(_globals, spec):
     """
     Modified from importlib._bootstrap._load_unlocked
-
-    It seems spec.loader.exec_module does not inject modules
-    loaded by module of the spec into sys.module. Can we use 
-    this feature to avoid injection of other modules?
     """
     if spec.loader is not None:
         # Not a namespace package.
@@ -152,7 +147,7 @@ def _load_unlocked(_globals, spec):
                     "falling back to load_module()")
             _warnings.warn(msg, ImportWarning)
             return _load_backward_compatible(_globals, spec)
-    module = load_module_from_spec(spec)
+    module = module_from_spec(spec)
     spec._initializing = True
     try:
         set_module_attrs(_globals, module)
@@ -170,11 +165,13 @@ def _load_unlocked(_globals, spec):
                 pass
             raise
         # Original importlib using sys.modules.pop to help move
-        # the module to the end of modules
+        # the module to the end of modules.
         # I use sys.modules.get there so that it would not be moved
-        # to the end of the dict
+        # to the end of the dict.
         # I forgot why I made this change. May be the original version
-        # is better
+        # is better.
+        # At the same time, refreshing built-in modules there;
+        # see PathFinder.BuiltinImporter.exec_module for details.
         module = _globals.modules.get(spec.name)
         _globals.modules[spec.name] = module
         _verbose_message('import {!r} # {!r}', spec.name, spec.loader)
@@ -338,7 +335,7 @@ def _import_core(_globals, name, globals=None, locals=None, fromlist=(), level=0
     # paths: list, bind a list like sys.path
     try:
         _import_functions = _globals.import_functions
-    except KeyError:
+    except AttributeError:
         _import_functions = default_import_functions
     last_exception = None
     for import_instance in _import_functions:

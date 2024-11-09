@@ -27,7 +27,6 @@ class BaseImporter:
 
     def init_globals(self):
         # works like globals()
-        util.reset_sys()
         self.modules = util.lib_setup()
         self.modules['__virtual_top__']=self
         self.modules['builtins'] = util.copy_builtins(self)
@@ -50,6 +49,9 @@ class BaseImporter:
         except:
             spec.loader.exec_module(module)
         return module
+
+    def find_spec(self, module_name, path=None, target=None):
+        return util._find_spec_core(self, module_name, path, target)
 
     def spec_from_path(self, path):
         last_sep = path.rfind(os.sep)
@@ -75,7 +77,7 @@ class BaseImporter:
         self.meta_path = _obj
 
 class _PathModuleImporter(BaseImporter):
-    def __init__(self, _dirs, _globals=None):
+    def __init__(self, _dirs=[], _globals=None):
         # _dirs:list - paths to find modules
         self.base_dirs = _dirs
         super().__init__(_dirs, _globals)
@@ -98,14 +100,14 @@ class _PathModuleImporter(BaseImporter):
             raise AttributeError('No module to unwrap')
         return obj.module
 
-    def load_module(self, module_name):
+    def load_module(self, module_name, *args, **kwargs):
         # name:str - module name 
-        return self.find_module(module_name)
+        return self.find_module(module_name, *args, **kwargs)
     
-    def find_module(self, module_name):
+    def find_module(self, module_name, *args, **kwargs):
         if module_name in self.modules:
             return self.modules.get(module_name)
-        return self.import_module(module_name)
+        return self.import_module(module_name, *args, **kwargs)
 
     def find_loaded_module(self, module_name):
         if module_name in self.modules:
@@ -152,7 +154,7 @@ _methods_to_wrap = ('find_module',
                     'load_given_module',
                     'define_module')
 class PathModuleImporter(_PathModuleImporter):
-    def __init__(self, _dirs, _globals=None, _cast=None):
+    def __init__(self, _dirs=[], _globals=None, _cast=None):
         super().__init__(_dirs, _globals)
         self.cast_methods(_cast, _methods_to_wrap)
 

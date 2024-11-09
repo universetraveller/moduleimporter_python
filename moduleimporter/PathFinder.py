@@ -2,6 +2,9 @@ import importlib
 from importlib.machinery import PathFinder
 from importlib._bootstrap_external import _NamespacePath
 import importlib._bootstrap
+import threading
+import sys
+import _imp
 
 class NameSpacePath(_NamespacePath):
     _epoch = 0
@@ -51,9 +54,52 @@ class NameSpacePathFinder(PathFinder):
             return spec
 
 class BuiltinImporter(importlib._bootstrap.BuiltinImporter):
+    # built-in modules are deemed as singleton there
+    _modules = {}
+    # to clean the pollution
+    _lock = threading.RLock()
+    
     @classmethod
     def find_spec(cls, _globals, fullname, path=None, target=None):
         return super().find_spec(fullname, path, target)
+
+    @staticmethod
+    def create_module(spec):
+        # skip _imp.create_builtin
+        return None
+
+    @staticmethod
+    def exec_module(module):
+        # actually load the built-in modules there
+        spec = module.__spec__
+        if spec.name not in BuiltinImporter._modules:
+            if spec.name not in sys.builtin_module_names:
+                raise ImportError(f'{spec.name!r} is not a built-in module',
+                                name=spec.name)
+            BuiltinImporter._lock.acquire()
+            _frozen = sys.modules.copy()
+            # This method invokes low-level C implementation which
+            # injects the related modules into global sys.modules
+            # see _imp_create_builtin in import.c
+            # If sys.modules is redirected, this function
+            # will raise exception because _imp uses the
+            # very original sys.modules and injects related
+            # modules into it
+            real = _imp.create_builtin(spec)
+            _imp.exec_builtin(real)
+            BuiltinImporter._modules[spec.name] = real
+            # workaround to keep sys.modules clean
+            for name in sys.modules.copy():
+                if name not in _frozen:
+                    sys.modules.pop(name, None)
+                    continue
+                _frozen_module = _frozen[name]
+                if sys.modules[name] != _frozen_module:
+                    sys.modules[name] = _frozen_module
+            BuiltinImporter._lock.release()
+        real = BuiltinImporter._modules[spec.name]
+        namespace = module.__dict__['sys'].modules
+        namespace[spec.name] = real
 
 class FrozenImporter(importlib._bootstrap.FrozenImporter):
     @classmethod
